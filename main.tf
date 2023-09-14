@@ -1,71 +1,40 @@
-
-data "azurerm_virtual_machine" "windowsvm" {
-  for_each            = var.virtual_machine_vmaccess_extensions
-  name                = each.value.virtual_machine_name
-  resource_group_name = each.value.vm_resource_group_name
+terraform {
+  backend "azurerm" {
+    resource_group_name  = "tamopstfstates"
+    storage_account_name = "tfstatedevops"
+    container_name       = "terraformgithubexample"
+    key                  = "terraformgithubexample.tfstate"
+  }
 }
-
-data "azurerm_key_vault" "infrakv" {
-  for_each            = var.virtual_machine_vmaccess_extensions
-  name                = each.value["infra_keyvault_name"]
-  resource_group_name = each.value["kv_resource_group"]
+ 
+provider "azurerm" {
+  # The "feature" block is required for AzureRM provider 2.x.
+  # If you're using version 1.x, the "features" block is not allowed.
+  version = "~>2.0"
+  features {}
 }
-
-data "azurerm_key_vault_secret" "adminpwd" {
-  for_each     = local.reset_password
-  name         = each.value["password_secret_name"]
-  key_vault_id = data.azurerm_key_vault.infrakv[each.key].id
+ 
+data "azurerm_client_config" "current" {}
+ 
+#Create Resource Group
+resource "azurerm_resource_group" "tamops" {
+  name     = "tamops"
+  location = "eastus2"
 }
-
-
-data "azurerm_key_vault_secret" "adminrdp" {
-  for_each     = local.reset_rdp
-  name         = each.value["rdp_key_secret_name"]
-  key_vault_id = data.azurerm_key_vault.infrakv[each.key].id
+ 
+#Create Virtual Network
+resource "azurerm_virtual_network" "vnet" {
+  name                = "tamops-vnet"
+  address_space       = ["192.168.0.0/16"]
+  location            = "eastus2"
+  resource_group_name = azurerm_resource_group.tamops.name
 }
-
-resource "azurerm_virtual_machine_extension" "VMAccessForWindows" {
-  for_each = local.reset_password == {} ? {}  : var.virtual_machine_vmaccess_extensions 
-  name = "enablevmaccess1"
-  virtual_machine_id = data.azurerm_virtual_machine.windowsvm[each.key].id
-  publisher = "Microsoft.OSTCExtensions"
-  type = "VMAccessForWindows"
-  type_handler_version =  "1.5"
-  # automatic_upgrade_enabled = false
-  # auto_upgrade_minor_version = true
-  protected_settings = <<SETTINGS
-        {
-          "username": "${each.value.username}",
-          "password": "${trimspace(lookup(data.azurerm_key_vault_secret.adminpwd, each.key)["value"])}"       
-        }
-    SETTINGS
-   depends_on = [
-      time_sleep.wait_3_seconds
-    ]
+ 
+# Create Subnet
+resource "azurerm_subnet" "subnet" {
+  name                 = "subnet"
+  resource_group_name  = azurerm_resource_group.tamops.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefix       = "192.168.0.0/24"
 }
-
-resource "time_sleep" "wait_3_seconds" {
-  create_duration = "3s"
-}
-
-
-resource "azurerm_virtual_machine_extension" "VMAccessForWindowsRDP" {
-  for_each = local.reset_ssh == null ? {}  : var.virtual_machine_vmaccess_extensions 
-  name              =  each.value.name
-  virtual_machine_id = data.azurerm_virtual_machine.linuxvm[each.key].id
-  publisher = "Microsoft.OSTCExtensions"
-  type = "VMAccessForWindows"
-  type_handler_version =  lookup(each.value , "type_handler_version" , "1.5")
-  # automatic_upgrade_enabled = false
-  auto_upgrade_minor_version = true
-  protected_settings = <<SETTINGS
-        {
-          "username": "${each.value.username}",
-           "ssh_key":  "${trimspace(lookup(data.azurerm_key_vault_secret.adminssh, each.key)["value"]) }" 
-         
-        }
-    SETTINGS
-    depends_on = [
-      time_sleep.wait_3_seconds
-    ]
-}
+  
